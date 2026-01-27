@@ -1,0 +1,52 @@
+[
+  {
+    "question": "how big is the mass in cm?",
+    "ground_truth": "2.5cm x 1.7cm x 1.6cm",
+    "predictions": [
+      "The image provided is a CT scan of a human brain. The mass in the image appears to be a large, irregularly shaped area of increased density. The"
+    ],
+    "answer_type": "open",
+    "image_id": null,
+    "question_id": null
+  },
+  {
+    "question": "what does the least dense region represent",
+    "ground_truth": "maxillary sinuses",
+    "predictions": [
+      "The least dense region in the MRI image represents the brain tissue. In this case, the least dense region appears to be the cerebrospinal fluid (CS"
+    ],
+    "answer_type": "open",
+    "image_id": null,
+    "question_id": null
+  },
+  {
+    "question": "is the trachea midline?",
+    "ground_truth": "yes",
+    "predictions": [
+      "The trachea is typically located in the midline of the chest, which is the center of the image. In this image, the trachea appears"
+    ],
+    "answer_type": "closed",
+    "image_id": null,
+    "question_id": null
+  },
+  {
+    "question": "is the skull fractured?",
+    "ground_truth": "no",
+    "predictions": [
+      "The image provided is a computed tomography (CT) scan of the head. The skull appears to be intact based on the visible bone structure. However, without"
+    ],
+    "answer_type": "closed",
+    "image_id": null,
+    "question_id": null
+  },
+  {
+    "question": "is there bowel gas?",
+    "ground_truth": "yes",
+    "predictions": [
+      "The CT scan image shows a cross-sectional view of the abdomen. There is no visible bowel gas in this image."
+    ],
+    "answer_type": "closed",
+    "image_id": null,
+    "question_id": null
+  }
+]

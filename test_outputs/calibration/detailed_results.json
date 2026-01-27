@@ -1,0 +1,62 @@
+[
+  {
+    "question": "is cardiomegaly present?",
+    "ground_truth": "yes",
+    "predicted": "no",
+    "confidence": 1.0,
+    "p_yes": 0.0,
+    "p_no": 1.0,
+    "is_correct": false,
+    "yes_count": 0,
+    "no_count": 1,
+    "unknown_count": 9
+  },
+  {
+    "question": "was this image taken by x-ray?",
+    "ground_truth": "no",
+    "predicted": "yes",
+    "confidence": 0.5,
+    "p_yes": 0.5,
+    "p_no": 0.5,
+    "is_correct": false,
+    "yes_count": 0,
+    "no_count": 0,
+    "unknown_count": 10
+  },
+  {
+    "question": "is the cardiac silhouette less than half the diameter of the diaphragm?",
+    "ground_truth": "yes",
+    "predicted": "no",
+    "confidence": 1.0,
+    "p_yes": 0.0,
+    "p_no": 1.0,
+    "is_correct": false,
+    "yes_count": 0,
+    "no_count": 10,
+    "unknown_count": 0
+  },
+  {
+    "question": "are the ventricles enlarged?",
+    "ground_truth": "yes",
+    "predicted": "yes",
+    "confidence": 0.5,
+    "p_yes": 0.5,
+    "p_no": 0.5,
+    "is_correct": true,
+    "yes_count": 0,
+    "no_count": 0,
+    "unknown_count": 10
+  },
+  {
+    "question": "is the image study normal?",
+    "ground_truth": "no",
+    "predicted": "yes",
+    "confidence": 0.5,
+    "p_yes": 0.5,
+    "p_no": 0.5,
+    "is_correct": false,
+    "yes_count": 0,
+    "no_count": 0,
+    "unknown_count": 10
+  }
+]
