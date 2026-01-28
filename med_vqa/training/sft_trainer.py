@@ -90,27 +90,33 @@ class VQASFTTrainer:
             self.train_config.max_length
         )
         
-        # Create training arguments
-        training_args = TrainingArguments(
-            output_dir=self.train_config.output_dir,
-            num_train_epochs=self.train_config.num_epochs,
-            per_device_train_batch_size=self.train_config.per_device_batch_size,
-            gradient_accumulation_steps=self.train_config.gradient_accumulation_steps,
-            learning_rate=self.train_config.learning_rate,
-            lr_scheduler_type=self.train_config.lr_scheduler_type,
-            warmup_ratio=self.train_config.warmup_ratio,
-            bf16=self.train_config.bf16,
-            fp16=not self.train_config.bf16,
-            logging_steps=self.train_config.logging_steps,
-            save_strategy=self.train_config.save_strategy,
-            save_total_limit=self.train_config.save_total_limit,
-            optim=self.train_config.optim,
-            gradient_checkpointing=self.train_config.gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-            report_to="none",
-            remove_unused_columns=False,
-            dataloader_pin_memory=False,
-        )
+        # Build training arguments
+        training_args_kwargs = {
+            "output_dir": self.train_config.output_dir,
+            "num_train_epochs": self.train_config.num_epochs,
+            "per_device_train_batch_size": self.train_config.per_device_batch_size,
+            "gradient_accumulation_steps": self.train_config.gradient_accumulation_steps,
+            "learning_rate": self.train_config.learning_rate,
+            "lr_scheduler_type": self.train_config.lr_scheduler_type,
+            "warmup_ratio": self.train_config.warmup_ratio,
+            "bf16": self.train_config.bf16,
+            "fp16": not self.train_config.bf16,
+            "logging_steps": self.train_config.logging_steps,
+            "save_strategy": self.train_config.save_strategy,
+            "save_total_limit": self.train_config.save_total_limit,
+            "optim": self.train_config.optim,
+            "gradient_checkpointing": self.train_config.gradient_checkpointing,
+            "gradient_checkpointing_kwargs": {"use_reentrant": False},
+            "report_to": "none",
+            "remove_unused_columns": False,
+            "dataloader_pin_memory": False,
+        }
+        
+        # Add save_steps if using steps strategy
+        if self.train_config.save_strategy == "steps":
+            training_args_kwargs["save_steps"] = self.train_config.save_steps
+        
+        training_args = TrainingArguments(**training_args_kwargs)
         
         self.trainer = Trainer(
             model=self.model,
@@ -132,14 +138,18 @@ class VQASFTTrainer:
         print(f"Question type: {self.data_config.question_type.value}")
         print(f"Training samples: {len(self.dataset)}")
         print(f"Epochs: {self.train_config.num_epochs}")
+        print(f"Effective batch size: {self.train_config.per_device_batch_size * self.train_config.gradient_accumulation_steps}")
+        print(f"Learning rate: {self.train_config.learning_rate}")
+        print(f"LoRA r={self.train_config.lora.r}, α={self.train_config.lora.lora_alpha}")
+        print(f"Save strategy: {self.train_config.save_strategy}")
         print(f"Output: {self.train_config.output_dir}")
         print("=" * 60 + "\n")
         
         # Train
         train_result = self.trainer.train()
         
-        # Save model
-        print(f"\nSaving model to {self.train_config.output_dir}...")
+        # Save final model
+        print(f"\nSaving final model to {self.train_config.output_dir}...")
         self.trainer.save_model()
         
         if hasattr(self.processor, 'save_pretrained'):
@@ -178,8 +188,11 @@ class VQASFTTrainer:
                     self.train_config.gradient_accumulation_steps
                 ),
                 "learning_rate": self.train_config.learning_rate,
+                "warmup_ratio": self.train_config.warmup_ratio,
+                "lr_scheduler": self.train_config.lr_scheduler_type,
                 "lora_r": self.train_config.lora.r,
                 "lora_alpha": self.train_config.lora.lora_alpha,
+                "lora_dropout": self.train_config.lora.lora_dropout,
             },
             "results": {
                 "train_loss": train_result.training_loss,

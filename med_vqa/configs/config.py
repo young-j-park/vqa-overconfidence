@@ -73,7 +73,7 @@ class DataConfig:
     subsample_size: Optional[int] = None  # None means use full dataset
     seed: int = 42
     
-    # Dataset-specific paths (for local datasets)
+    # Dataset-specific paths (for local datasets like SLAKE)
     data_path: Optional[str] = None
     image_dir: Optional[str] = None
 
@@ -81,8 +81,8 @@ class DataConfig:
 @dataclass
 class LoRAConfig:
     """Configuration for LoRA adapters."""
-    r: int = 16
-    lora_alpha: int = 32
+    r: int = 64  # Higher rank for domain adaptation
+    lora_alpha: int = 128  # Typically 2×r
     lora_dropout: float = 0.05
     bias: str = "none"
     task_type: str = "CAUSAL_LM"
@@ -106,18 +106,19 @@ class LoRAConfig:
 class SFTConfig:
     """Configuration for Supervised Fine-Tuning."""
     output_dir: str
-    num_epochs: int = 10
+    num_epochs: int = 5
     per_device_batch_size: int = 4
-    gradient_accumulation_steps: int = 4
-    learning_rate: float = 2e-4
+    gradient_accumulation_steps: int = 8
+    learning_rate: float = 5e-5  # Lower for medical domain
     lr_scheduler_type: str = "cosine"
-    warmup_ratio: float = 0.1
+    warmup_ratio: float = 0.03
     max_length: int = 2048
     bf16: bool = True
     gradient_checkpointing: bool = True
     logging_steps: int = 10
     save_strategy: str = "epoch"
-    save_total_limit: int = 2
+    save_steps: int = 500  # Used if save_strategy="steps"
+    save_total_limit: int = 5  # Keep all epoch checkpoints
     optim: str = "paged_adamw_8bit"
     
     # LoRA config
@@ -225,21 +226,34 @@ def create_sft_config(
     output_dir: str,
     dataset: str = "rad_vqa",
     question_type: str = "all",
+    data_path: Optional[str] = None,
     subsample_size: Optional[int] = None,
-    num_epochs: int = 10,
+    num_epochs: int = 5,
+    learning_rate: float = 5e-5,
+    lora_r: int = 64,
+    lora_alpha: int = 128,
     seed: int = 42,
 ) -> ExperimentConfig:
     """Create a standard SFT experiment configuration."""
     
+    data_config_kwargs = {
+        "dataset_name": DatasetName(dataset),
+        "question_type": QuestionType(question_type),
+        "subsample_size": subsample_size,
+        "seed": seed,
+    }
+    if data_path:
+        data_config_kwargs["data_path"] = data_path
+    
     return ExperimentConfig(
         model=ModelConfig(model_id=model_id),
-        data=DataConfig(
-            dataset_name=DatasetName(dataset),
-            question_type=QuestionType(question_type),
-            subsample_size=subsample_size,
-            seed=seed,
+        data=DataConfig(**data_config_kwargs),
+        training=SFTConfig(
+            output_dir=output_dir, 
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            lora=LoRAConfig(r=lora_r, lora_alpha=lora_alpha),
         ),
-        training=SFTConfig(output_dir=output_dir, num_epochs=num_epochs),
         experiment_name=f"sft_{os.path.basename(output_dir)}",
         seed=seed,
     )

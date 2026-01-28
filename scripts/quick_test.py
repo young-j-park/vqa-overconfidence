@@ -9,8 +9,11 @@ Tests the entire pipeline with minimal data (5-10 samples) to verify everything 
 4. Calibration evaluation
 
 Usage:
-    # Test single model (default: Qwen)
+    # Test single model (default: Qwen) with RAD-VQA
     python scripts/quick_test.py --gpu 0
+
+    # Test with SLAKE dataset (requires local files)
+    python scripts/quick_test.py --gpu 0 --dataset slake --slake_path /path/to/Slake1.0
 
     # Test specific model
     python scripts/quick_test.py --model_id Qwen/Qwen2-VL-2B-Instruct --gpu 0
@@ -66,6 +69,13 @@ DEFAULT_MODELS = {
     "llava_next": "llava-hf/llava-v1.6-mistral-7b-hf",
 }
 
+# Default SLAKE paths to check
+DEFAULT_SLAKE_PATHS = [
+    "/data/datasets/Slake1.0",
+    "~/datasets/Slake1.0",
+    "./data/Slake1.0",
+]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Quick E2E Test")
@@ -77,6 +87,13 @@ def parse_args():
                        help="Comma-separated model families to test: qwen,internvl,llava,llava_next")
     parser.add_argument("--test_all_models", action="store_true",
                        help="Test all supported model families")
+    
+    # Dataset selection
+    parser.add_argument("--dataset", type=str, default="rad_vqa",
+                       choices=["rad_vqa", "slake"],
+                       help="Dataset to use for testing")
+    parser.add_argument("--slake_path", type=str, default=None,
+                       help="Path to local SLAKE dataset (Slake1.0 directory)")
     
     # GPU and basic settings
     parser.add_argument("--gpu", type=str, default="0", help="GPU index")
@@ -103,6 +120,28 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     
     return parser.parse_args()
+
+
+def find_slake_path(provided_path: str = None) -> str:
+    """Find SLAKE dataset path."""
+    # Check provided path first
+    if provided_path:
+        expanded = os.path.expanduser(provided_path)
+        if os.path.exists(expanded):
+            return expanded
+        raise FileNotFoundError(f"SLAKE path not found: {provided_path}")
+    
+    # Check default locations
+    for path in DEFAULT_SLAKE_PATHS:
+        expanded = os.path.expanduser(path)
+        if os.path.exists(expanded):
+            print(f"[SLAKE] Found dataset at: {expanded}")
+            return expanded
+    
+    raise FileNotFoundError(
+        "SLAKE dataset not found. Please specify --slake_path or place dataset in one of:\n" +
+        "\n".join(f"  - {p}" for p in DEFAULT_SLAKE_PATHS)
+    )
 
 
 def get_models_to_test(args) -> list:
@@ -145,6 +184,31 @@ def print_error(msg: str):
     print(f"  ❌ {msg}")
 
 
+def create_data_config(
+    dataset_name: str,
+    split: str,
+    subsample_size: int,
+    seed: int,
+    question_type: QuestionType = QuestionType.ALL,
+    slake_path: str = None,
+) -> DataConfig:
+    """Create DataConfig with proper settings for the dataset."""
+    
+    config_kwargs = {
+        "dataset_name": DatasetName(dataset_name),
+        "question_type": question_type,
+        "split": split,
+        "subsample_size": subsample_size,
+        "seed": seed,
+    }
+    
+    # Add SLAKE-specific path if needed
+    if dataset_name == "slake" and slake_path:
+        config_kwargs["data_path"] = slake_path
+    
+    return DataConfig(**config_kwargs)
+
+
 def test_base_inference(
     model_config: ModelConfig,
     data_config: DataConfig,
@@ -155,7 +219,7 @@ def test_base_inference(
     
     try:
         # Load dataset
-        print_info(f"Loading {data_config.subsample_size} test samples...")
+        print_info(f"Loading {data_config.subsample_size} test samples from {data_config.dataset_name.value}...")
         dataset_wrapper = get_dataset(data_config)
         dataset = dataset_wrapper.load()
         print_success(f"Loaded {len(dataset)} samples")
@@ -236,6 +300,7 @@ def test_sft_training(
         )
         
         print_info(f"Training on {train_data_config.subsample_size} samples for 1 epoch...")
+        print_info(f"Dataset: {train_data_config.dataset_name.value}")
         
         trainer = VQASFTTrainer(experiment_config)
         trainer.setup()
@@ -323,21 +388,23 @@ def test_calibration(
     adapter_path: str,
     output_dir: str,
     num_samples: int,
+    slake_path: str = None,
 ) -> bool:
     """Test 4: Calibration evaluation."""
     print_header("TEST 4: Calibration Evaluation")
     
     try:
         # Load dataset (closed questions only)
-        closed_data_config = DataConfig(
-            dataset_name=data_config.dataset_name,
-            question_type=QuestionType.CLOSED,
+        closed_data_config = create_data_config(
+            dataset_name=data_config.dataset_name.value,
             split=data_config.split,
             subsample_size=data_config.subsample_size,
             seed=data_config.seed,
+            question_type=QuestionType.CLOSED,
+            slake_path=slake_path,
         )
         
-        print_info(f"Loading closed questions...")
+        print_info(f"Loading closed questions from {data_config.dataset_name.value}...")
         dataset_wrapper = get_dataset(closed_data_config)
         dataset = dataset_wrapper.load()
         print_success(f"Loaded {len(dataset)} closed questions")
@@ -403,11 +470,13 @@ def run_tests_for_model(
     model_id: str,
     args,
     output_dir: str,
+    slake_path: str = None,
 ) -> dict:
     """Run all tests for a single model."""
     
     print("\n" + "=" * 60)
     print(f"  TESTING MODEL: {model_id}")
+    print(f"  DATASET: {args.dataset.upper()}")
     print("=" * 60)
     
     # Setup configs
@@ -418,25 +487,28 @@ def run_tests_for_model(
     
     print(f"  Detected family: {model_config.model_family.value}")
     
-    train_data_config = DataConfig(
-        dataset_name=DatasetName.RAD_VQA,
-        question_type=QuestionType.CLOSED,
+    # Create data configs with proper SLAKE path
+    train_data_config = create_data_config(
+        dataset_name=args.dataset,
         split="train",
         subsample_size=args.num_train_samples,
         seed=args.seed,
+        question_type=QuestionType.CLOSED,
+        slake_path=slake_path,
     )
     
-    test_data_config = DataConfig(
-        dataset_name=DatasetName.RAD_VQA,
-        question_type=QuestionType.ALL,
+    test_data_config = create_data_config(
+        dataset_name=args.dataset,
         split="test",
         subsample_size=args.num_test_samples,
         seed=args.seed,
+        question_type=QuestionType.ALL,
+        slake_path=slake_path,
     )
     
     # Create model-specific output directory
     model_name = model_id.split("/")[-1].replace("-", "_").lower()
-    model_output_dir = os.path.join(output_dir, model_name)
+    model_output_dir = os.path.join(output_dir, f"{model_name}_{args.dataset}")
     os.makedirs(model_output_dir, exist_ok=True)
     
     # Track results
@@ -475,7 +547,8 @@ def run_tests_for_model(
         adapter_for_cal = checkpoint_path
         results["calibration"] = test_calibration(
             model_config, test_data_config, adapter_for_cal, 
-            model_output_dir, args.num_calibration_samples
+            model_output_dir, args.num_calibration_samples,
+            slake_path=slake_path,
         )
     else:
         print_header("TEST 4: Calibration (SKIPPED)")
@@ -491,12 +564,24 @@ def main():
     # Get models to test
     models_to_test = get_models_to_test(args)
     
+    # Find SLAKE path if needed
+    slake_path = None
+    if args.dataset == "slake":
+        try:
+            slake_path = find_slake_path(args.slake_path)
+        except FileNotFoundError as e:
+            print(f"\n❌ {e}")
+            sys.exit(1)
+    
     print("\n" + "=" * 60)
     print("  MEDICAL VQA FRAMEWORK - QUICK E2E TEST")
     print("=" * 60)
     print(f"Models to test: {len(models_to_test)}")
     for m in models_to_test:
         print(f"  - {m}")
+    print(f"Dataset: {args.dataset.upper()}")
+    if slake_path:
+        print(f"SLAKE path: {slake_path}")
     print(f"GPU: {args.gpu}")
     print(f"Train samples: {args.num_train_samples}")
     print(f"Test samples: {args.num_test_samples}")
@@ -517,7 +602,9 @@ def main():
     all_results = {}
     for model_id in models_to_test:
         try:
-            all_results[model_id] = run_tests_for_model(model_id, args, output_dir)
+            all_results[model_id] = run_tests_for_model(
+                model_id, args, output_dir, slake_path
+            )
         except Exception as e:
             print_error(f"Model {model_id} failed: {e}")
             import traceback
@@ -531,6 +618,7 @@ def main():
     print("\n" + "=" * 60)
     print("  FINAL TEST SUMMARY")
     print("=" * 60)
+    print(f"  Dataset: {args.dataset.upper()}")
     
     all_passed = True
     for model_id, results in all_results.items():

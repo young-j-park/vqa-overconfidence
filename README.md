@@ -10,6 +10,7 @@ A modular, extensible framework for training and evaluating Vision-Language Mode
 - **Question Type Filtering**: Train on closed-only, open-only, or mixed questions
 - **Dataset Subsampling**: Control training set size with seed for reproducibility
 - **Calibration Evaluation**: ECE, MCE, overconfidence metrics
+- **Optimized Data Loading**: Lazy image loading with HuggingFace Image feature
 
 ## Project Structure
 
@@ -61,26 +62,99 @@ pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 ```
 
+## Dataset Setup
+
+### RAD-VQA
+
+RAD-VQA is automatically downloaded from HuggingFace. No setup required.
+
+```python
+DataConfig(
+    dataset_name=DatasetName.RAD_VQA,
+    split="train",  # or "test"
+)
+```
+
+### SLAKE
+
+SLAKE requires downloading the dataset manually from the official source.
+
+#### 1. Download SLAKE
+
+Download from the official website: https://www.med-vqa.com/slake/
+
+Or use the Google Drive link provided on the project page.
+
+#### 2. Extract the dataset
+
+```bash
+unzip Slake1.0.zip -d /path/to/datasets/
+```
+
+Expected structure:
+```
+Slake1.0/
+├── train.json      # 9,835 samples (4,919 English)
+├── test.json       # 2,094 samples (1,061 English)
+├── validate.json   # 2,099 samples (1,053 English)
+├── imgs/
+│   ├── xmlab0/
+│   │   └── source.jpg
+│   ├── xmlab1/
+│   │   └── source.jpg
+│   └── ... (642 image directories)
+└── KG/             # Knowledge graph (optional)
+```
+
+#### 3. Configure the path
+
+Option A: Set `data_path` in DataConfig:
+```python
+DataConfig(
+    dataset_name=DatasetName.SLAKE,
+    data_path="/path/to/Slake1.0",
+    split="train",
+)
+```
+
+Option B: Place in a default location (auto-detected):
+- `/data/datasets/Slake1.0`
+- `~/datasets/Slake1.0`
+- `./data/Slake1.0`
+- `~/Downloads/Slake1.0`
+
+#### SLAKE Dataset Statistics
+
+| Split | Total | English | EN-Closed | EN-Open |
+|-------|-------|---------|-----------|---------|
+| train | 9,835 | 4,919 | 1,943 | 2,976 |
+| test | 2,094 | 1,061 | 416 | 645 |
+| validate | 2,099 | 1,053 | 422 | 631 |
+
+**Note**: The framework automatically filters to English-only questions.
+
 ## Quick Test (Verify Everything Works)
 
 Run a full end-to-end test with minimal data:
 
 ```bash
-# Test single model (default: Qwen) - ~5-10 min
+# Test with RAD-VQA (default) - ~5-10 min
 python scripts/quick_test.py --gpu 0
 
-# Test ALL supported model families (Qwen, InternVL, LLaVA) - ~20-30 min
+# Test with SLAKE dataset
+python scripts/quick_test.py --gpu 0 --dataset slake --slake_path /path/to/Slake1.0
+
+# Test with SLAKE (auto-detect path)
+python scripts/quick_test.py --gpu 0 --dataset slake
+
+# Test ALL supported model families - ~20-30 min
 python scripts/quick_test.py --test_all_models --gpu 0
 
 # Test specific model families
 python scripts/quick_test.py --model_families qwen,internvl --gpu 0
-python scripts/quick_test.py --model_families llava --gpu 5
-
-# Test specific model
-python scripts/quick_test.py --model_id Qwen/Qwen3-VL-2B-Instruct --gpu 0
 
 # Fast test: inference only (no training/calibration) - ~2 min per model
-python scripts/quick_test.py --inference_only --test_all_models --gpu 0
+python scripts/quick_test.py --inference_only --gpu 0
 
 # Keep outputs for inspection
 python scripts/quick_test.py --keep_outputs --output_dir ./test_outputs --gpu 0
@@ -153,8 +227,17 @@ from med_vqa.training import run_sft_training
 # Train Qwen-VL-2B on RAD-VQA closed questions
 python scripts/train_sft.py \
     --model_id Qwen/Qwen3-VL-2B-Instruct \
-    --output_dir ./checkpoints/qwen3-2b-closed \
+    --output_dir ./checkpoints/qwen3-2b-radvqa-closed \
     --dataset rad_vqa \
+    --question_type closed \
+    --epochs 10
+
+# Train on SLAKE dataset
+python scripts/train_sft.py \
+    --model_id Qwen/Qwen3-VL-2B-Instruct \
+    --output_dir ./checkpoints/qwen3-2b-slake-closed \
+    --dataset slake \
+    --slake_path /path/to/Slake1.0 \
     --question_type closed \
     --epochs 10
 
@@ -185,6 +268,14 @@ python scripts/run_inference.py \
     --dataset rad_vqa \
     --split test \
     --output_path ./results/sft_predictions.json
+
+# Inference on SLAKE
+python scripts/run_inference.py \
+    --model_id Qwen/Qwen3-VL-2B-Instruct \
+    --dataset slake \
+    --slake_path /path/to/Slake1.0 \
+    --split test \
+    --output_path ./results/slake_predictions.json
 ```
 
 ### 3. Calibration Evaluation
@@ -238,6 +329,50 @@ config = ExperimentConfig(
 results = run_sft_training(config)
 ```
 
+### Using SLAKE programmatically
+
+```python
+from med_vqa.configs import DataConfig, DatasetName, QuestionType
+from med_vqa.data import get_dataset
+
+# Load SLAKE dataset
+config = DataConfig(
+    dataset_name=DatasetName.SLAKE,
+    data_path="/path/to/Slake1.0",  # Required for SLAKE
+    question_type=QuestionType.CLOSED,
+    split="train",
+    subsample_size=100,
+    seed=42,
+)
+
+dataset_wrapper = get_dataset(config)
+dataset = dataset_wrapper.load()
+
+# Access samples (images loaded lazily)
+sample = dataset[0]
+print(sample["question"])  # Text loaded immediately
+print(sample["image"])     # Image loaded on-demand
+```
+
+## Data Loading Optimization
+
+The framework uses HuggingFace's `Image` feature for optimized data loading:
+
+- **Lazy Loading**: Images are loaded on-demand, not all at once
+- **Memory Mapped**: Arrow format enables efficient memory usage
+- **Fast Batching**: Optimized for DataLoader and Trainer
+
+```python
+# Images stored as paths, loaded lazily
+VQA_FEATURES = Features({
+    "image": Image(),  # HuggingFace handles lazy loading
+    "question": Value("string"),
+    "answer": Value("string"),
+    "answer_type": Value("string"),
+    ...
+})
+```
+
 ## Adding New Datasets
 
 1. Create a new dataset class in `med_vqa/data/datasets.py`:
@@ -249,21 +384,20 @@ class MyDataset(BaseVQADataset):
         return "MyDataset"
     
     def _load_raw(self) -> Dataset:
-        return load_dataset("my/dataset", split=self.config.split)
-    
-    def _determine_answer_type(self, sample: Dict) -> str:
-        # Return "closed" or "open"
-        answer = sample["answer"].lower()
-        return "closed" if answer in ["yes", "no"] else "open"
-    
-    def _to_unified_format(self, sample: Dict) -> Dict:
-        return {
-            "image": sample["image"],
-            "question": sample["question"],
-            "answer": sample["answer"],
-            "answer_type": self._determine_answer_type(sample),
-            "dataset_source": self.name,
-        }
+        # Load data and return in unified format
+        samples = []
+        for item in my_data:
+            samples.append({
+                "image": item["image_path"],  # Path for lazy loading
+                "question": item["question"],
+                "answer": item["answer"],
+                "answer_type": "closed" if item["answer"].lower() in ["yes", "no"] else "open",
+                "question_id": f"my_q_{item['id']}",
+                "image_id": f"my_img_{item['id']}",
+                "dataset_source": self.name,
+            })
+        
+        return Dataset.from_list(samples, features=VQA_FEATURES)
 ```
 
 2. Register it in the dataset registry:
@@ -296,6 +430,7 @@ The framework auto-detects model families from model IDs. To add support for a n
 
 ### DataConfig
 - `dataset_name`: Dataset to use (rad_vqa, slake)
+- `data_path`: Path to local dataset (required for SLAKE)
 - `question_type`: Filter questions (all, closed, open)
 - `subsample_size`: Limit dataset size (None for full)
 - `seed`: Random seed for reproducibility
@@ -325,3 +460,7 @@ If you use this framework, please cite:
   year = {2025},
 }
 ```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

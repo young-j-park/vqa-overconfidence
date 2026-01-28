@@ -5,21 +5,36 @@ Provides a unified interface for different VQA datasets with support for:
 - Question type filtering (closed/open/all)
 - Subsampling with seed control
 - Conversion to unified format
+- Local file loading (for datasets like SLAKE)
+- Optimized image handling with HuggingFace Image feature
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any, Iterator
-from datasets import Dataset, load_dataset
-import random
+from typing import Dict, List, Optional, Any, Union
+from datasets import Dataset, Features, Image, Value, load_dataset
+import json
+import os
 
 from ..configs import DataConfig, QuestionType, DatasetName
+
+
+# Unified schema for all VQA datasets
+VQA_FEATURES = Features({
+    "image": Image(),  # HuggingFace optimized image handling
+    "question": Value("string"),
+    "answer": Value("string"),
+    "answer_type": Value("string"),  # "closed" or "open"
+    "question_id": Value("string"),
+    "image_id": Value("string"),
+    "dataset_source": Value("string"),
+})
 
 
 @dataclass
 class VQASample:
     """Unified VQA sample format across all datasets."""
-    image: Any  # PIL Image
+    image: Any  # PIL Image or path
     question: str
     answer: str
     answer_type: str  # "closed" or "open"
@@ -47,30 +62,13 @@ class BaseVQADataset(ABC):
     
     @abstractmethod
     def _load_raw(self) -> Dataset:
-        """Load raw dataset from source."""
-        pass
-    
-    @abstractmethod
-    def _determine_answer_type(self, sample: Dict) -> str:
-        """Determine if a sample is closed (yes/no) or open."""
-        pass
-    
-    @abstractmethod
-    def _to_unified_format(self, sample: Dict, idx: int) -> Dict:
-        """Convert dataset-specific format to unified format."""
+        """Load raw dataset and return in unified format with VQA_FEATURES."""
         pass
     
     def load(self) -> Dataset:
         """Load and process the dataset."""
-        # Load raw data
-        self._raw_dataset = self._load_raw()
-        
-        # Convert to unified format (with index for ID generation)
-        self._processed_dataset = self._raw_dataset.map(
-            lambda sample, idx: self._to_unified_format(sample, idx),
-            with_indices=True,
-            remove_columns=self._raw_dataset.column_names,
-        )
+        # Load raw data (already in unified format)
+        self._processed_dataset = self._load_raw()
         
         # Filter by question type
         self._processed_dataset = self._filter_by_question_type()
@@ -141,82 +139,173 @@ class RADVQADataset(BaseVQADataset):
     def name(self) -> str:
         return "RAD-VQA"
     
-    def _load_raw(self) -> Dataset:
-        """Load RAD-VQA from HuggingFace."""
-        print(f"[{self.name}] Loading from HuggingFace: {self.HF_DATASET_ID}")
-        return load_dataset(self.HF_DATASET_ID, split=self.config.split)
-    
-    def _determine_answer_type(self, sample: Dict) -> str:
+    def _determine_answer_type(self, answer: str) -> str:
         """RAD-VQA: closed if answer is yes/no."""
-        answer = str(sample.get("answer", "")).lower().strip()
-        return "closed" if answer in ["yes", "no"] else "open"
+        answer_lower = answer.lower().strip()
+        return "closed" if answer_lower in ["yes", "no"] else "open"
     
-    def _to_unified_format(self, sample: Dict, idx: int) -> Dict:
-        """Convert RAD-VQA format to unified format."""
-        return {
-            "image": sample["image"],
-            "question": sample["question"],
-            "answer": str(sample["answer"]),
-            "answer_type": self._determine_answer_type(sample),
-            "question_id": f"rad_vqa_q_{idx}",
-            "image_id": f"rad_vqa_img_{idx}",
-            "dataset_source": self.name,
-        }
+    def _load_raw(self) -> Dataset:
+        """Load RAD-VQA from HuggingFace and convert to unified format."""
+        print(f"[{self.name}] Loading from HuggingFace: {self.HF_DATASET_ID}")
+        raw_dataset = load_dataset(self.HF_DATASET_ID, split=self.config.split)
+        
+        print(f"[{self.name}] Converting {len(raw_dataset)} samples to unified format...")
+        
+        # Build unified samples list
+        samples = []
+        for idx, sample in enumerate(raw_dataset):
+            answer = str(sample["answer"])
+            samples.append({
+                "image": sample["image"],  # Already PIL Image from HF
+                "question": sample["question"],
+                "answer": answer,
+                "answer_type": self._determine_answer_type(answer),
+                "question_id": f"rad_vqa_q_{idx}",
+                "image_id": f"rad_vqa_img_{idx}",
+                "dataset_source": self.name,
+            })
+        
+        # Create dataset with optimized features
+        dataset = Dataset.from_list(samples, features=VQA_FEATURES)
+        print(f"[{self.name}] Loaded {len(dataset)} samples")
+        
+        return dataset
 
 
 class SLAKEDataset(BaseVQADataset):
-    """SLAKE (Semantically-Labeled Knowledge-Enhanced) Medical VQA dataset."""
+    """SLAKE (Semantically-Labeled Knowledge-Enhanced) Medical VQA dataset.
     
-    HF_DATASET_ID = "BoKelworworker/SLAKE"
+    Supports loading from local files (official SLAKE dataset directory).
+    
+    The official SLAKE dataset structure:
+        Slake1.0/
+        ├── train.json
+        ├── test.json  
+        ├── validate.json
+        └── imgs/
+            ├── xmlab0/source.jpg
+            ├── xmlab1/source.jpg
+            └── ...
+    
+    To use local files, set data_path in DataConfig:
+        DataConfig(
+            dataset_name=DatasetName.SLAKE,
+            data_path="/path/to/Slake1.0",
+            ...
+        )
+    """
+    
+    # Default local paths to check
+    DEFAULT_LOCAL_PATHS = [
+        "./data/Slake1.0",
+    ]
     
     @property
     def name(self) -> str:
         return "SLAKE"
     
-    def _load_raw(self) -> Dataset:
-        """Load SLAKE from HuggingFace."""
-        print(f"[{self.name}] Loading from HuggingFace: {self.HF_DATASET_ID}")
+    def _find_local_path(self) -> str:
+        """Find SLAKE dataset in common locations."""
+        # First check config
+        if self.config.data_path:
+            expanded = os.path.expanduser(self.config.data_path)
+            if os.path.exists(expanded):
+                return expanded
+            raise FileNotFoundError(f"SLAKE data_path not found: {self.config.data_path}")
         
-        # SLAKE has different splits structure
-        # Map our split names to SLAKE's structure
-        split_mapping = {
-            "train": "train",
-            "test": "test", 
-            "validation": "validate",
-        }
-        hf_split = split_mapping.get(self.config.split, self.config.split)
+        # Check default locations
+        for path in self.DEFAULT_LOCAL_PATHS:
+            expanded = os.path.expanduser(path)
+            if os.path.exists(expanded):
+                print(f"[{self.name}] Found local dataset at: {expanded}")
+                return expanded
         
-        return load_dataset(self.HF_DATASET_ID, split=hf_split)
+        raise FileNotFoundError(
+            f"SLAKE dataset not found. Please set data_path in DataConfig.\n"
+            f"Checked locations:\n" + 
+            "\n".join(f"  - {p}" for p in self.DEFAULT_LOCAL_PATHS)
+        )
     
-    def _determine_answer_type(self, sample: Dict) -> str:
-        """SLAKE: has explicit answer_type field, but we normalize it."""
-        # SLAKE uses "CLOSED" and "OPEN" in answer_type field
-        answer_type = str(sample.get("answer_type", "")).upper()
-        
-        if answer_type == "CLOSED":
+    def _normalize_answer_type(self, answer_type: str) -> str:
+        """Normalize SLAKE answer_type (CLOSED/OPEN -> closed/open)."""
+        answer_type_upper = str(answer_type).upper()
+        if answer_type_upper == "CLOSED":
             return "closed"
-        elif answer_type == "OPEN":
+        elif answer_type_upper == "OPEN":
             return "open"
         else:
-            # Fallback: check answer content
-            answer = str(sample.get("answer", "")).lower().strip()
-            return "closed" if answer in ["yes", "no"] else "open"
+            return "open"  # Default to open for unknown types
     
-    def _to_unified_format(self, sample: Dict, idx: int) -> Dict:
-        """Convert SLAKE format to unified format."""
-        # Use existing IDs if available, otherwise generate from index
-        question_id = sample.get("qid") or f"slake_q_{idx}"
-        image_id = sample.get("img_id") or sample.get("img_name") or f"slake_img_{idx}"
+    def _load_raw(self) -> Dataset:
+        """Load SLAKE from local files with optimized image handling."""
+        data_path = self._find_local_path()
         
-        return {
-            "image": sample["img"],  # SLAKE uses 'img' instead of 'image'
-            "question": sample["question"],
-            "answer": str(sample["answer"]),
-            "answer_type": self._determine_answer_type(sample),
-            "question_id": str(question_id),
-            "image_id": str(image_id),
-            "dataset_source": self.name,
+        # Map split names
+        split_mapping = {
+            "train": "train.json",
+            "test": "test.json",
+            "validation": "validate.json",
+            "validate": "validate.json",
         }
+        
+        split_file = split_mapping.get(self.config.split)
+        if split_file is None:
+            raise ValueError(f"Unknown split: {self.config.split}. "
+                           f"Available: {list(split_mapping.keys())}")
+        
+        json_path = os.path.join(data_path, split_file)
+        imgs_dir = os.path.join(data_path, "imgs")
+        
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(f"Split file not found: {json_path}")
+        if not os.path.exists(imgs_dir):
+            raise FileNotFoundError(f"Images directory not found: {imgs_dir}")
+        
+        print(f"[{self.name}] Loading from local: {json_path}")
+        
+        # Load JSON annotations
+        with open(json_path, "r", encoding="utf-8") as f:
+            annotations = json.load(f)
+        
+        # Filter to English only
+        english_annotations = [a for a in annotations if a.get("q_lang") == "en"]
+        print(f"[{self.name}] Filtered to English: {len(english_annotations)}/{len(annotations)}")
+        
+        # Build samples with image PATHS (not loaded PIL images)
+        # HuggingFace Image feature will handle lazy loading
+        samples = []
+        missing_images = 0
+        
+        for idx, ann in enumerate(english_annotations):
+            img_name = ann.get("img_name", "")
+            img_path = os.path.join(imgs_dir, img_name)
+            
+            if os.path.exists(img_path):
+                # Store path - HuggingFace Image feature loads lazily
+                qid = ann.get("qid", idx)
+                img_id = ann.get("img_id", idx)
+                
+                samples.append({
+                    "image": img_path,  # Path string, not PIL Image!
+                    "question": ann["question"],
+                    "answer": str(ann["answer"]),
+                    "answer_type": self._normalize_answer_type(ann.get("answer_type", "OPEN")),
+                    "question_id": f"slake_q_{qid}",
+                    "image_id": f"slake_img_{img_id}",
+                    "dataset_source": self.name,
+                })
+            else:
+                missing_images += 1
+        
+        if missing_images > 0:
+            print(f"[{self.name}] Warning: {missing_images} images not found")
+        
+        # Create dataset with optimized HuggingFace Image feature
+        # Images will be loaded lazily and efficiently by Arrow
+        dataset = Dataset.from_list(samples, features=VQA_FEATURES)
+        print(f"[{self.name}] Loaded {len(dataset)} samples (images loaded lazily)")
+        
+        return dataset
 
 
 # Dataset Registry
