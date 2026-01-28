@@ -56,8 +56,8 @@ SAVE_STRATEGY="epoch"
 SAVE_TOTAL_LIMIT=5
 QUESTION_TYPE="all"
 
-# Batch size: effective batch size = 8 for all models
-BATCH_SIZE=1
+# Batch size: effective batch size = 16 for all models
+BATCH_SIZE=2
 GRAD_ACCUM=8
 
 # =============================================================================
@@ -65,13 +65,13 @@ GRAD_ACCUM=8
 # =============================================================================
 
 declare -A MODELS
-MODELS["qwen"]="Qwen/Qwen2-VL-7B-Instruct"
+MODELS["qwen"]="Qwen/Qwen3-VL-8B-Instruct"
 MODELS["internvl"]="OpenGVLab/InternVL3-8B-hf"
 MODELS["llava"]="llava-hf/llava-v1.6-mistral-7b-hf"
 
 # Short names for output directories
 declare -A MODEL_NAMES
-MODEL_NAMES["qwen"]="qwen2vl_7b"
+MODEL_NAMES["qwen"]="qwen3vl_8b"
 MODEL_NAMES["internvl"]="internvl3_8b"
 MODEL_NAMES["llava"]="llava_next_7b"
 
@@ -110,7 +110,7 @@ run_training() {
     # Create log directory
     mkdir -p "${OUTPUT_BASE}/logs"
     
-    # Build command
+    # Build command (using arguments supported by current train_sft.py)
     local CMD="python scripts/train_sft.py \
         --model_id ${MODEL_ID} \
         --output_dir ${OUTPUT_DIR} \
@@ -121,18 +121,10 @@ run_training() {
         --batch_size ${BATCH_SIZE} \
         --grad_accum ${GRAD_ACCUM} \
         --learning_rate ${LEARNING_RATE} \
+        --max_length ${MAX_LENGTH} \
         --lora_r ${LORA_R} \
         --lora_alpha ${LORA_ALPHA} \
-        --warmup_ratio ${WARMUP_RATIO} \
-        --max_length ${MAX_LENGTH} \
-        --save_strategy ${SAVE_STRATEGY} \
-        --save_total_limit ${SAVE_TOTAL_LIMIT} \
         --gpu ${GPU}"
-    
-    # Add SLAKE path if needed
-    if [ "$DATASET" == "slake" ]; then
-        CMD="$CMD --slake_path ${SLAKE_PATH}"
-    fi
     
     if [ "$DRY_RUN" = true ]; then
         echo ""
@@ -230,12 +222,12 @@ else
     echo "6 training jobs started in parallel:"
     echo ""
     echo "  SLAKE Dataset:"
-    echo "    GPU 0: Qwen2-VL-7B"
+    echo "    GPU 0: Qwen3-VL-8B"
     echo "    GPU 1: InternVL3-8B"
     echo "    GPU 2: LLaVA-NeXT-7B"
     echo ""
     echo "  RAD-VQA Dataset:"
-    echo "    GPU 3: Qwen2-VL-7B"
+    echo "    GPU 3: Qwen3-VL-8B"
     echo "    GPU 4: InternVL3-8B"
     echo "    GPU 5: LLaVA-NeXT-7B"
     echo ""
