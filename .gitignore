@@ -207,6 +207,7 @@ marimo/_lsp/
 __marimo__/
 checkpoints/
 outputs/
+test_outputs/
 results/
 __pycache__/
 *.pyc
@@ -214,3 +215,4 @@ __pycache__/
 *.egg-info/
 wandb/
 *.log
+test_outputs/
