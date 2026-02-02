@@ -211,6 +211,7 @@ data/
 outputs/
 test_outputs/
 results/
+debug_scripts/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
