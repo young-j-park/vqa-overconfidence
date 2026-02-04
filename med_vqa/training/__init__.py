@@ -11,6 +11,6 @@ from .grpo_trainer import (
 __all__ = [
     "VQASFTTrainer",
     "run_sft_training",
-    "VQAGRPOTrainer", 
+    "VQAGRPOTrainer",
     "run_grpo_training",
 ]

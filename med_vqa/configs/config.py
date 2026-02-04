@@ -43,15 +43,15 @@ class ModelConfig:
     torch_dtype: str = "bfloat16"
     device_map: str = "auto"
     trust_remote_code: bool = True
-    
+
     def __post_init__(self):
         if self.model_family is None:
             self.model_family = self._detect_family()
-    
+
     def _detect_family(self) -> ModelFamily:
         """Auto-detect model family from model_id."""
         model_id_lower = self.model_id.lower()
-        
+
         if "qwen" in model_id_lower and "vl" in model_id_lower:
             return ModelFamily.QWEN_VL
         elif "internvl" in model_id_lower:
@@ -72,7 +72,7 @@ class DataConfig:
     split: str = "train"
     subsample_size: Optional[int] = None  # None means use full dataset
     seed: int = 42
-    
+
     # Dataset-specific paths (for local datasets like SLAKE)
     data_path: Optional[str] = None
     image_dir: Optional[str] = None
@@ -87,11 +87,11 @@ class LoRAConfig:
     bias: str = "none"
     task_type: str = "CAUSAL_LM"
     target_modules: Optional[List[str]] = None  # None means "all-linear"
-    
+
     def to_peft_config(self):
         """Convert to PEFT LoraConfig."""
         from peft import LoraConfig as PeftLoraConfig
-        
+
         return PeftLoraConfig(
             r=self.r,
             lora_alpha=self.lora_alpha,
@@ -120,27 +120,44 @@ class SFTConfig:
     save_steps: int = 500  # Used if save_strategy="steps"
     save_total_limit: int = 5  # Keep all epoch checkpoints
     optim: str = "paged_adamw_8bit"
-    
+
     # LoRA config
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 
 
-@dataclass 
+@dataclass
 class GRPOConfig:
-    """Configuration for GRPO training (placeholder for future implementation)."""
+    """Configuration for GRPO (Group Relative Policy Optimization) training."""
     output_dir: str
     num_epochs: int = 3
     per_device_batch_size: int = 1
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 8
     learning_rate: float = 5e-6
-    num_generations: int = 4
-    temperature: float = 0.7
-    beta: float = 0.1
-    max_completion_length: int = 64
-    max_prompt_length: int = 2048
     bf16: bool = True
     gradient_checkpointing: bool = True
-    
+
+    # GRPO-specific
+    num_generations: int = 8
+    temperature: float = 0.8
+    beta: float = 0.0            # KL penalty (0 = no ref model, saves VRAM)
+    loss_type: str = "dapo"      # "grpo", "dapo", or "dr_grpo"
+    max_completion_length: int = 128
+    max_prompt_length: Optional[int] = None  # None = no truncation (VLMs)
+
+    # Reward weights
+    accuracy_weight: float = 3.0
+    format_weight: float = 1.0
+
+    # Saving
+    save_strategy: str = "epoch"
+    save_steps: int = 50
+    save_total_limit: int = 5
+
+    # Logging
+    logging_steps: int = 1
+    log_completions: bool = True
+    report_to: str = "none"
+
     # LoRA config
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 
@@ -172,47 +189,55 @@ class ExperimentConfig:
     model: ModelConfig
     data: DataConfig
     training: Optional[SFTConfig] = None
+    grpo: Optional[GRPOConfig] = None
     inference: Optional[InferenceConfig] = None
     evaluation: Optional[EvaluationConfig] = None
-    
+
     # Experiment metadata
     experiment_name: str = "experiment"
     seed: int = 42
-    
+
     def save(self, path: str):
         """Save configuration to JSON file."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             json.dump(asdict(self), f, indent=2, default=str)
-    
+
     @classmethod
     def load(cls, path: str) -> "ExperimentConfig":
         """Load configuration from JSON file."""
         with open(path, "r") as f:
             data = json.load(f)
-        
+
         # Reconstruct nested dataclasses
         model_config = ModelConfig(**data["model"])
         data_config = DataConfig(**data["data"])
-        
+
         training_config = None
         if data.get("training"):
             lora_data = data["training"].pop("lora", {})
             lora_config = LoRAConfig(**lora_data)
             training_config = SFTConfig(**data["training"], lora=lora_config)
-        
+
+        grpo_config = None
+        if data.get("grpo"):
+            lora_data = data["grpo"].pop("lora", {})
+            lora_config = LoRAConfig(**lora_data)
+            grpo_config = GRPOConfig(**data["grpo"], lora=lora_config)
+
         inference_config = None
         if data.get("inference"):
             inference_config = InferenceConfig(**data["inference"])
-        
+
         eval_config = None
         if data.get("evaluation"):
             eval_config = EvaluationConfig(**data["evaluation"])
-        
+
         return cls(
             model=model_config,
             data=data_config,
             training=training_config,
+            grpo=grpo_config,
             inference=inference_config,
             evaluation=eval_config,
             experiment_name=data.get("experiment_name", "experiment"),
@@ -235,7 +260,7 @@ def create_sft_config(
     seed: int = 42,
 ) -> ExperimentConfig:
     """Create a standard SFT experiment configuration."""
-    
+
     data_config_kwargs = {
         "dataset_name": DatasetName(dataset),
         "question_type": QuestionType(question_type),
@@ -244,16 +269,55 @@ def create_sft_config(
     }
     if data_path:
         data_config_kwargs["data_path"] = data_path
-    
+
     return ExperimentConfig(
         model=ModelConfig(model_id=model_id),
         data=DataConfig(**data_config_kwargs),
         training=SFTConfig(
-            output_dir=output_dir, 
+            output_dir=output_dir,
             num_epochs=num_epochs,
             learning_rate=learning_rate,
             lora=LoRAConfig(r=lora_r, lora_alpha=lora_alpha),
         ),
         experiment_name=f"sft_{os.path.basename(output_dir)}",
+        seed=seed,
+    )
+
+
+def create_grpo_config(
+    model_id: str,
+    output_dir: str,
+    dataset: str = "rad_vqa",
+    data_path: Optional[str] = None,
+    subsample_size: Optional[int] = None,
+    num_epochs: int = 3,
+    learning_rate: float = 5e-6,
+    lora_r: int = 64,
+    lora_alpha: int = 128,
+    num_generations: int = 8,
+    seed: int = 42,
+) -> ExperimentConfig:
+    """Create a standard GRPO experiment configuration."""
+
+    data_config_kwargs = {
+        "dataset_name": DatasetName(dataset),
+        "question_type": QuestionType("closed"),
+        "subsample_size": subsample_size,
+        "seed": seed,
+    }
+    if data_path:
+        data_config_kwargs["data_path"] = data_path
+
+    return ExperimentConfig(
+        model=ModelConfig(model_id=model_id, use_4bit=False),
+        data=DataConfig(**data_config_kwargs),
+        grpo=GRPOConfig(
+            output_dir=output_dir,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            num_generations=num_generations,
+            lora=LoRAConfig(r=lora_r, lora_alpha=lora_alpha),
+        ),
+        experiment_name=f"grpo_{os.path.basename(output_dir)}",
         seed=seed,
     )

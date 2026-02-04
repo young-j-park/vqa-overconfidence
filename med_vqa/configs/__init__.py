@@ -11,6 +11,7 @@ from .config import (
     EvaluationConfig,
     ExperimentConfig,
     create_sft_config,
+    create_grpo_config,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "EvaluationConfig",
     "ExperimentConfig",
     "create_sft_config",
+    "create_grpo_config",
 ]

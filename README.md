@@ -160,32 +160,3 @@ results/calibration/
 │   └── ...
 └── ...
 ```
-
-## Debugging
-
-### Check raw model outputs
-```bash
-python scripts/debug_model_outputs.py \
-    --model_id llava-hf/llava-v1.6-mistral-7b-hf \
-    --adapter_path ./checkpoints/rad_vqa_llava_next_7b_... \
-    --dataset rad_vqa \
-    --num_examples 10 \
-    --gpu 0
-```
-
-### Check N differences
-```bash
-python scripts/debug_n_differences.py --results_dir ./results/calibration
-```
-
-## Expected Results
-
-| Dataset | Model | Type | N | Acc | ECE | Unknown% |
-|---------|-------|------|---|-----|-----|----------|
-| RAD-VQA | Qwen3-VL-8B | BASE | 251 | ~0.68 | ~0.28 | ~8% |
-| RAD-VQA | Qwen3-VL-8B | SFT | 251 | ~0.75 | ~0.18 | ~1% |
-| RAD-VQA | InternVL3-8B | BASE | 251 | ~0.65 | ~0.30 | ~27% |
-| RAD-VQA | InternVL3-8B | SFT | 251 | ~0.72 | ~0.20 | ~0% |
-| ... | ... | ... | ... | ... | ... | ... |
-
-**Note**: All models should have the same N (251 for RAD-VQA, 416 for SLAKE) for fair comparison.
