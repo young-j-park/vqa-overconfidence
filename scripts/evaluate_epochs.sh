@@ -56,8 +56,7 @@ CMD="python scripts/evaluate_across_epochs.py \
     --output_base $OUTPUT_BASE \
     --slake_path $SLAKE_PATH \
     --gpus $GPUS \
-    --method $METHOD \
-    --gpu_strategy affinity"
+    --method $METHOD"
 
 # Add optional num_samples override
 if [ -n "$NUM_SAMPLES" ]; then

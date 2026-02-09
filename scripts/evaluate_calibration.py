@@ -79,6 +79,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from med_vqa.configs import ModelConfig, DataConfig, DatasetName, QuestionType, ModelFamily
 from med_vqa.data import get_dataset
 from med_vqa.models import load_model
+from med_vqa.models.two_stage_loader import smart_load_model
 from med_vqa.utils import set_seed
 
 
@@ -108,19 +109,15 @@ Analyze the medical image carefully. Provide your reasoning inside <think> tags,
 # =============================================================================
 
 def detect_prompt_mode(adapter_path: Optional[str]) -> str:
-    """Auto-detect prompting mode from adapter path.
-
-    Returns one of: "cot" (base), "direct" (sft), "grpo"
-    """
     if adapter_path is None:
         return "cot"
-
     path_lower = adapter_path.lower()
-    if "grpo" in path_lower:
+    if "contrast_sft" in path_lower:
+        return "direct"  # contrast_sft uses standard VQA format
+    elif "grpo" in path_lower:
         return "grpo"
     else:
         return "direct"
-
 
 # =============================================================================
 # Data Classes
@@ -344,7 +341,7 @@ class CalibrationEvaluator:
     def load_model(self):
         """Load model and processor."""
         print("Loading model...")
-        self.model, self.processor = load_model(
+        self.model, self.processor = smart_load_model(
             self.model_config,
             adapter_path=self.adapter_path,
             prepare_for_training=False,

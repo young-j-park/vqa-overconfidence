@@ -63,7 +63,11 @@ def parse_result_name(name: str) -> Tuple[str, str, str]:
     if parts[0] in ["base", "sft", "grpo"]:
         eval_type = parts[0].upper()
     else:
-        if "grpo" in name.lower():
+        if "contrast_sft" in name.lower():
+            eval_type = "CONTRAST_SFT"
+        elif "contrast_grpo" in name.lower():
+            eval_type = "CONTRAST_GRPO"
+        elif "grpo" in name.lower():
             eval_type = "GRPO"
         elif any(p in name for p in ["lr5e-5", "lr1e-4"]):
             eval_type = "SFT"
@@ -89,7 +93,7 @@ def parse_result_name(name: str) -> Tuple[str, str, str]:
     return eval_type, model, dataset
 
 
-EVAL_TYPE_ORDER = ["BASE", "SFT", "GRPO"]
+EVAL_TYPE_ORDER = ["BASE", "SFT", "GRPO", "CONTRAST_GRPO", "CONTRAST_SFT"]
 
 
 def format_table_text(results: Dict[str, dict]) -> str:

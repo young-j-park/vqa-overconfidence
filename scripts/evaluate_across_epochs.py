@@ -6,8 +6,8 @@ Discovers all checkpoint-* subdirectories inside each training run,
 then dispatches calibration evaluation jobs across multiple GPUs.
 
 Evaluation strategy (auto-selected per training method):
-  - SFT / BASE:  logits method (fast, directly reads yes/no token probabilities)
-  - GRPO:        sampling method with n=20 (generates <think>...<answer> chains)
+  - SFT / AUG_SFT / BASE:  logits method (fast, directly reads yes/no token probabilities)
+  - GRPO / AUG_GRPO:        sampling method with n=20 (generates <think>...<answer> chains)
 
 For each (model, dataset, training_method, epoch) combination, runs
 evaluate_calibration.py with the appropriate adapter_path.
@@ -30,6 +30,12 @@ Usage:
 
     # Only SFT checkpoints
     python scripts/evaluate_across_epochs.py --filter sft --gpus 0,1,2,3,4,5,6,7
+
+    # Only augmented SFT checkpoints
+    python scripts/evaluate_across_epochs.py --filter aug_sft --gpus 0,1,2,3,4,5,6,7
+
+    # Only augmented GRPO checkpoints
+    python scripts/evaluate_across_epochs.py --filter aug_grpo --gpus 0,1,2,3,4,5,6,7
 
     # Specific models only
     python scripts/evaluate_across_epochs.py --models qwen --gpus 0,1,2,3,4,5,6,7
@@ -101,7 +107,7 @@ class EvalJob:
     model_key: str
     adapter_path: Optional[str]  # None for BASE model
     dataset: str
-    training_method: str  # "base", "sft", "grpo"
+    training_method: str  # "base", "sft", "grpo", "aug_sft", "aug_grpo"
     checkpoint_label: str  # "base", "epoch-1", "step-100", "final"
     checkpoint_step: Optional[int]  # numeric step for sorting
     output_dir: str
@@ -113,7 +119,7 @@ class EvalJob:
     @property
     def sort_key(self) -> Tuple:
         """Sort key for ordering jobs."""
-        method_order = {"base": 0, "sft": 1, "grpo": 2}
+        method_order = {"base": 0, "sft": 1, "aug_sft": 2, "grpo": 3, "aug_grpo": 4, "contrast_grpo": 5, "contrast_sft": 6}
         return (
             self.dataset,
             self.model_key,
@@ -126,9 +132,12 @@ class EvalJob:
 # SFT/BASE: logits (fast, sufficient for direct yes/no models)
 # GRPO: sampling (must generate <think>...<answer> chains and parse)
 METHOD_DEFAULTS = {
-    "base": {"method": "logits", "num_samples": 1},
-    "sft":  {"method": "logits", "num_samples": 1},
-    "grpo": {"method": "sampling", "num_samples": 20},
+    "base":     {"method": "logits", "num_samples": 1},
+    "sft":      {"method": "logits", "num_samples": 1},
+    "grpo":     {"method": "sampling", "num_samples": 20},
+    "aug_sft":  {"method": "logits", "num_samples": 1},
+    "aug_grpo": {"method": "sampling", "num_samples": 20},
+    "contrast_sft": {"method": "logits", "num_samples": 1},
 }
 
 
@@ -157,7 +166,16 @@ def identify_dataset(dirname: str) -> Optional[str]:
 
 def identify_training_method(dirname: str) -> str:
     """Identify training method from directory name."""
-    if dirname.lower().startswith("grpo_"):
+    dl = dirname.lower()
+    if dl.startswith("aug_grpo_"):
+        return "aug_grpo"
+    elif dl.startswith("aug_sft_"):
+        return "aug_sft"
+    elif dirname_lower.startswith("contrast_sft_"):
+        return "contrast_sft"
+    elif dirname_lower.startswith("contrast_grpo_"):
+        return "contrast_grpo"
+    elif dl.startswith("grpo_"):
         return "grpo"
     else:
         return "sft"
@@ -530,7 +548,13 @@ def generate_epoch_summary(output_base: str) -> str:
 
         # Parse run_part
         training_method = "base"
-        if run_part.startswith("grpo_"):
+        if run_part.startswith("aug_grpo_"):
+            training_method = "aug_grpo"
+            rest = run_part[9:]
+        elif run_part.startswith("aug_sft_"):
+            training_method = "aug_sft"
+            rest = run_part[8:]
+        elif run_part.startswith("grpo_"):
             training_method = "grpo"
             rest = run_part[5:]
         elif run_part.startswith("sft_"):
@@ -574,7 +598,7 @@ def generate_epoch_summary(output_base: str) -> str:
         })
 
     # Sort
-    method_order = {"BASE": 0, "SFT": 1, "GRPO": 2}
+    method_order = {"BASE": 0, "SFT": 1, "AUG_SFT": 2, "GRPO": 3, "AUG_GRPO": 4, "CONTRAST_GRPO": 5, "CONTRAST_SFT": 6}
     parsed.sort(key=lambda x: (
         x["dataset"],
         x["model"],
@@ -632,8 +656,8 @@ def parse_args():
 
     # Filtering
     parser.add_argument("--filter", type=str, default=None,
-                        choices=["sft", "grpo"],
-                        help="Only evaluate SFT or GRPO checkpoints")
+                        choices=["sft", "grpo", "aug_sft", "aug_grpo"],
+                        help="Only evaluate specific training type checkpoints")
     parser.add_argument("--models", type=str, default=None,
                         help="Comma-separated model filters (e.g., qwen,internvl)")
     parser.add_argument("--datasets", type=str, default=None,
@@ -694,10 +718,10 @@ def main():
 
     # Apply filters
     if args.filter:
-        if args.filter == "grpo":
-            all_runs = [r for r in all_runs if r.startswith("grpo_")]
-        elif args.filter == "sft":
-            all_runs = [r for r in all_runs if not r.startswith("grpo_")]
+        all_runs = [
+            r for r in all_runs
+            if identify_training_method(r) == args.filter
+        ]
 
     if args.models:
         model_filters = [m.strip().lower() for m in args.models.split(",")]
@@ -727,7 +751,7 @@ def main():
     print(f"Output base:      {args.output_base}")
     print(f"GPUs:             {gpus}")
     print(f"Method:           {args.method} "
-          f"(SFT/BASE→logits, GRPO→sampling(n=20))"
+          f"(SFT/AUG_SFT/BASE→logits, GRPO/AUG_GRPO→sampling(n=20))"
           if args.method == "auto" else f"Method: {args.method}")
     if args.num_samples is not None:
         print(f"Num samples:      {args.num_samples} (override)")
